@@ -70,6 +70,57 @@ async def list_tools() -> list[Tool]:
     """List all available inventory analysis tools."""
     return [
         Tool(
+            name="search_categories",
+            description="Search for product categories by name. Use this to find category IDs before querying stock levels or other analysis. Returns category ID, name, and parent category.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Category name to search for (partial match supported)"
+                    }
+                },
+                "required": ["name"]
+            }
+        ),
+        Tool(
+            name="search_products",
+            description="Search for products by name or code. Use this to find product IDs before querying stock levels or other analysis. Returns product ID, name, code, category, and current stock.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Product name or code to search for (partial match supported)"
+                    },
+                    "category_name": {
+                        "type": "string",
+                        "description": "Optional category name to filter products"
+                    }
+                },
+                "required": ["name"]
+            }
+        ),
+        Tool(
+            name="get_products_by_category",
+            description="Get all products in a category by category name. Returns product list with ID, name, code, and current stock quantities.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category_name": {
+                        "type": "string",
+                        "description": "Category name to search for (e.g., 'Colour / Durasafe')"
+                    },
+                    "include_subcategories": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Include products from subcategories"
+                    }
+                },
+                "required": ["category_name"]
+            }
+        ),
+        Tool(
             name="get_stock_levels",
             description="Get current stock levels for products with status classification (out of stock, critical, low, normal, overstock). Shows quantities on hand, incoming, outgoing, and forecast.",
             inputSchema={
@@ -360,8 +411,151 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
     try:
         client = get_odoo_client()
 
+        # Search Tools
+        if name == "search_categories":
+            search_name = arguments.get("name", "")
+            categories = client.search_read(
+                'product.category',
+                [('name', 'ilike', search_name)],
+                ['id', 'name', 'complete_name', 'parent_id'],
+                limit=50
+            )
+            results = []
+            for cat in categories:
+                results.append({
+                    'id': cat['id'],
+                    'name': cat['name'],
+                    'full_path': cat.get('complete_name', cat['name']),
+                    'parent': cat['parent_id'][1] if cat.get('parent_id') else None
+                })
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps(results, indent=2)
+                )]
+            )
+
+        elif name == "search_products":
+            search_name = arguments.get("name", "")
+            category_name = arguments.get("category_name")
+
+            domain = [
+                '|',
+                ('name', 'ilike', search_name),
+                ('default_code', 'ilike', search_name),
+                ('type', '=', 'product')
+            ]
+
+            # If category name provided, find category first
+            if category_name:
+                categories = client.search_read(
+                    'product.category',
+                    [('complete_name', 'ilike', category_name)],
+                    ['id'],
+                    limit=10
+                )
+                if categories:
+                    cat_ids = [c['id'] for c in categories]
+                    domain.append(('categ_id', 'child_of', cat_ids))
+
+            products = client.search_read(
+                'product.product',
+                domain,
+                ['id', 'name', 'default_code', 'categ_id', 'qty_available', 'virtual_available'],
+                limit=50
+            )
+            results = []
+            for prod in products:
+                results.append({
+                    'id': prod['id'],
+                    'name': prod['name'],
+                    'code': prod.get('default_code') or 'N/A',
+                    'category': prod['categ_id'][1] if prod.get('categ_id') else None,
+                    'on_hand': prod.get('qty_available', 0),
+                    'forecasted': prod.get('virtual_available', 0)
+                })
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps(results, indent=2)
+                )]
+            )
+
+        elif name == "get_products_by_category":
+            category_name = arguments.get("category_name", "")
+            include_subcategories = arguments.get("include_subcategories", True)
+
+            # Find category by name
+            categories = client.search_read(
+                'product.category',
+                [('complete_name', 'ilike', category_name)],
+                ['id', 'name', 'complete_name'],
+                limit=10
+            )
+
+            if not categories:
+                return CallToolResult(
+                    content=[TextContent(
+                        type="text",
+                        text=json.dumps({"error": f"No category found matching '{category_name}'"}, indent=2)
+                    )]
+                )
+
+            # Use the first matching category
+            category = categories[0]
+            cat_id = category['id']
+
+            # Get products
+            if include_subcategories:
+                product_domain = [('categ_id', 'child_of', cat_id), ('type', '=', 'product')]
+            else:
+                product_domain = [('categ_id', '=', cat_id), ('type', '=', 'product')]
+
+            products = client.search_read(
+                'product.product',
+                product_domain,
+                ['id', 'name', 'default_code', 'categ_id', 'qty_available', 'virtual_available', 'incoming_qty', 'outgoing_qty'],
+                order='default_code'
+            )
+
+            results = {
+                'category': {
+                    'id': category['id'],
+                    'name': category['name'],
+                    'full_path': category.get('complete_name', category['name'])
+                },
+                'product_count': len(products),
+                'products': []
+            }
+
+            for prod in products:
+                results['products'].append({
+                    'id': prod['id'],
+                    'name': prod['name'],
+                    'code': prod.get('default_code') or 'N/A',
+                    'on_hand': prod.get('qty_available', 0),
+                    'forecasted': prod.get('virtual_available', 0),
+                    'incoming': prod.get('incoming_qty', 0),
+                    'outgoing': prod.get('outgoing_qty', 0)
+                })
+
+            # Add summary
+            results['summary'] = {
+                'total_on_hand': sum(p['on_hand'] for p in results['products']),
+                'total_forecasted': sum(p['forecasted'] for p in results['products']),
+                'total_incoming': sum(p['incoming'] for p in results['products']),
+                'total_outgoing': sum(p['outgoing'] for p in results['products'])
+            }
+
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps(results, indent=2)
+                )]
+            )
+
         # Stock Level Tools
-        if name == "get_stock_levels":
+        elif name == "get_stock_levels":
             analyzer = StockLevelAnalyzer(client)
             results = analyzer.get_stock_levels(
                 product_ids=arguments.get("product_ids"),
