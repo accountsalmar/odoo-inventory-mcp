@@ -589,7 +589,7 @@ async def run_sse(host: str = "0.0.0.0", port: int = 8000):
     from mcp.server.sse import SseServerTransport
     from starlette.applications import Starlette
     from starlette.routing import Route, Mount
-    from starlette.responses import JSONResponse
+    from starlette.responses import JSONResponse, PlainTextResponse
     import uvicorn
 
     sse = SseServerTransport("/messages/")
@@ -608,9 +608,13 @@ async def run_sse(host: str = "0.0.0.0", port: int = 8000):
     async def health_check(request):
         return JSONResponse({"status": "healthy", "service": "inventory-analysis-mcp"})
 
+    async def root(request):
+        return PlainTextResponse("Odoo Inventory Analysis MCP Server is running. Connect via /sse endpoint.")
+
     starlette_app = Starlette(
         debug=False,
         routes=[
+            Route("/", root),
             Route("/health", health_check),
             Route("/sse", handle_sse),
             Mount("/messages/", routes=[Route("/", handle_messages, methods=["POST"])]),
@@ -626,9 +630,10 @@ def main():
     """Main entry point - determines transport based on environment."""
     import sys
 
-    # Check if running in HTTP/SSE mode (for Railway/remote deployment)
-    if os.environ.get("MCP_TRANSPORT", "stdio") == "sse":
-        port = int(os.environ.get("PORT", 8000))
+    # Check if PORT is set (Railway sets this) or MCP_TRANSPORT is sse
+    port = os.environ.get("PORT")
+    if port or os.environ.get("MCP_TRANSPORT", "stdio") == "sse":
+        port = int(port or 8000)
         host = os.environ.get("HOST", "0.0.0.0")
         print(f"Starting MCP server with SSE transport on {host}:{port}")
         asyncio.run(run_sse(host=host, port=port))
