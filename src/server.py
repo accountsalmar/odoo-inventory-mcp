@@ -511,24 +511,39 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
                     cat_ids = [c['id'] for c in categories]
                     domain.append(('categ_id', 'child_of', cat_ids))
 
-            products = client.search_read(
+            # First get products with stored fields
+            products_basic = client.search_read(
                 'product.product',
                 domain,
-                ['id', 'name', 'default_code', 'categ_id', 'qty_available', 'virtual_available', 'minimum', 'pending_forecast', 'require'],
+                ['id', 'name', 'default_code', 'categ_id', 'qty_available', 'virtual_available', 'minimum'],
                 limit=50
             )
+
+            # Then use read() to get computed fields (pending_forecast, require)
+            product_ids = [p['id'] for p in products_basic]
+            products_computed = {}
+            if product_ids:
+                computed_data = client.read(
+                    'product.product',
+                    product_ids,
+                    ['id', 'pending_forecast', 'require']
+                )
+                products_computed = {p['id']: p for p in computed_data}
+
             results = []
-            for prod in products:
+            for prod in products_basic:
+                prod_id = prod['id']
+                computed = products_computed.get(prod_id, {})
                 results.append({
-                    'id': prod['id'],
+                    'id': prod_id,
                     'name': prod['name'],
                     'code': prod.get('default_code') or 'N/A',
                     'category': prod['categ_id'][1] if prod.get('categ_id') else None,
                     'on_hand': prod.get('qty_available', 0),
                     'forecasted': prod.get('virtual_available', 0),
                     'minimum': prod.get('minimum', 0),
-                    'pending_forecast': prod.get('pending_forecast', 0),
-                    'require': prod.get('require', 0)
+                    'pending_forecast': computed.get('pending_forecast', 0),
+                    'require': computed.get('require', 0)
                 })
             return CallToolResult(
                 content=[TextContent(
@@ -567,12 +582,24 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
             else:
                 product_domain = [('categ_id', '=', cat_id), ('type', '=', 'product')]
 
-            products = client.search_read(
+            # First get product IDs with stored fields
+            products_basic = client.search_read(
                 'product.product',
                 product_domain,
-                ['id', 'name', 'default_code', 'categ_id', 'qty_available', 'virtual_available', 'incoming_qty', 'outgoing_qty', 'minimum', 'pending_forecast', 'require'],
+                ['id', 'name', 'default_code', 'categ_id', 'qty_available', 'virtual_available', 'incoming_qty', 'outgoing_qty', 'minimum'],
                 order='default_code'
             )
+
+            # Then use read() to get computed fields (pending_forecast, require)
+            product_ids = [p['id'] for p in products_basic]
+            products_computed = {}
+            if product_ids:
+                computed_data = client.read(
+                    'product.product',
+                    product_ids,
+                    ['id', 'pending_forecast', 'require']
+                )
+                products_computed = {p['id']: p for p in computed_data}
 
             results = {
                 'category': {
@@ -580,13 +607,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
                     'name': category['name'],
                     'full_path': category.get('complete_name', category['name'])
                 },
-                'product_count': len(products),
+                'product_count': len(products_basic),
                 'products': []
             }
 
-            for prod in products:
+            for prod in products_basic:
+                prod_id = prod['id']
+                computed = products_computed.get(prod_id, {})
                 results['products'].append({
-                    'id': prod['id'],
+                    'id': prod_id,
                     'name': prod['name'],
                     'code': prod.get('default_code') or 'N/A',
                     'on_hand': prod.get('qty_available', 0),
@@ -594,8 +623,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
                     'incoming': prod.get('incoming_qty', 0),
                     'outgoing': prod.get('outgoing_qty', 0),
                     'minimum': prod.get('minimum', 0),
-                    'pending_forecast': prod.get('pending_forecast', 0),
-                    'require': prod.get('require', 0)
+                    'pending_forecast': computed.get('pending_forecast', 0),
+                    'require': computed.get('require', 0)
                 })
 
             # Add summary
