@@ -93,17 +93,20 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Product name or code to search for (partial match supported)"
                     },
+                    "product_id": {
+                        "type": "integer",
+                        "description": "Product ID to search for (exact match)"
+                    },
                     "category_name": {
                         "type": "string",
                         "description": "Optional category name to filter products"
                     }
-                },
-                "required": ["name"]
+                }
             }
         ),
         Tool(
             name="get_products_by_category",
-            description="Get all products in a category by category name. Returns product list with ID, name, code, and current stock quantities.",
+            description="Get all products in a category by category name. Returns product list with ID, name, code, on_hand, minimum stock, pending_forecast, and require (quantity to order).",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -118,6 +121,50 @@ async def list_tools() -> list[Tool]:
                     }
                 },
                 "required": ["category_name"]
+            }
+        ),
+        Tool(
+            name="get_reorder_rules",
+            description="Get minimum stock levels (reorder points) for products. Shows product min/max quantities, reorder rules, and current stock vs minimum threshold.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "product_name": {
+                        "type": "string",
+                        "description": "Product name to search for (partial match)"
+                    },
+                    "category_name": {
+                        "type": "string",
+                        "description": "Category name to filter products"
+                    },
+                    "only_below_minimum": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Only show products below minimum stock level"
+                    }
+                }
+            }
+        ),
+        Tool(
+            name="get_stock_forecast",
+            description="Get pending stock forecast for products showing scheduled incoming and outgoing moves for a specific number of weeks. Shows what stock will be after pending moves.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "product_name": {
+                        "type": "string",
+                        "description": "Product name to search for (partial match)"
+                    },
+                    "category_name": {
+                        "type": "string",
+                        "description": "Category name to filter products"
+                    },
+                    "weeks": {
+                        "type": "integer",
+                        "default": 4,
+                        "description": "Number of weeks to forecast (1-12)"
+                    }
+                }
             }
         ),
         Tool(
@@ -436,15 +483,21 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
             )
 
         elif name == "search_products":
-            search_name = arguments.get("name", "")
+            search_name = arguments.get("name")
+            product_id = arguments.get("product_id")
             category_name = arguments.get("category_name")
 
-            domain = [
-                '|',
-                ('name', 'ilike', search_name),
-                ('default_code', 'ilike', search_name),
-                ('type', '=', 'product')
-            ]
+            # Build domain based on search criteria
+            domain = [('type', '=', 'product')]
+
+            if product_id:
+                # Search by ID (exact match)
+                domain.append(('id', '=', product_id))
+            elif search_name:
+                # Search by name or code (partial match)
+                domain.insert(0, '|')
+                domain.insert(1, ('name', 'ilike', search_name))
+                domain.insert(2, ('default_code', 'ilike', search_name))
 
             # If category name provided, find category first
             if category_name:
@@ -461,7 +514,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
             products = client.search_read(
                 'product.product',
                 domain,
-                ['id', 'name', 'default_code', 'categ_id', 'qty_available', 'virtual_available'],
+                ['id', 'name', 'default_code', 'categ_id', 'qty_available', 'virtual_available', 'minimum', 'pending_forecast', 'require'],
                 limit=50
             )
             results = []
@@ -472,7 +525,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
                     'code': prod.get('default_code') or 'N/A',
                     'category': prod['categ_id'][1] if prod.get('categ_id') else None,
                     'on_hand': prod.get('qty_available', 0),
-                    'forecasted': prod.get('virtual_available', 0)
+                    'forecasted': prod.get('virtual_available', 0),
+                    'minimum': prod.get('minimum', 0),
+                    'pending_forecast': prod.get('pending_forecast', 0),
+                    'require': prod.get('require', 0)
                 })
             return CallToolResult(
                 content=[TextContent(
@@ -514,7 +570,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
             products = client.search_read(
                 'product.product',
                 product_domain,
-                ['id', 'name', 'default_code', 'categ_id', 'qty_available', 'virtual_available', 'incoming_qty', 'outgoing_qty'],
+                ['id', 'name', 'default_code', 'categ_id', 'qty_available', 'virtual_available', 'incoming_qty', 'outgoing_qty', 'minimum', 'pending_forecast', 'require'],
                 order='default_code'
             )
 
@@ -536,7 +592,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
                     'on_hand': prod.get('qty_available', 0),
                     'forecasted': prod.get('virtual_available', 0),
                     'incoming': prod.get('incoming_qty', 0),
-                    'outgoing': prod.get('outgoing_qty', 0)
+                    'outgoing': prod.get('outgoing_qty', 0),
+                    'minimum': prod.get('minimum', 0),
+                    'pending_forecast': prod.get('pending_forecast', 0),
+                    'require': prod.get('require', 0)
                 })
 
             # Add summary
@@ -544,7 +603,238 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
                 'total_on_hand': sum(p['on_hand'] for p in results['products']),
                 'total_forecasted': sum(p['forecasted'] for p in results['products']),
                 'total_incoming': sum(p['incoming'] for p in results['products']),
-                'total_outgoing': sum(p['outgoing'] for p in results['products'])
+                'total_outgoing': sum(p['outgoing'] for p in results['products']),
+                'total_minimum': sum(p['minimum'] for p in results['products']),
+                'total_pending_forecast': sum(p['pending_forecast'] for p in results['products']),
+                'total_require': sum(p['require'] for p in results['products'])
+            }
+
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps(results, indent=2)
+                )]
+            )
+
+        elif name == "get_reorder_rules":
+            product_name = arguments.get("product_name")
+            category_name = arguments.get("category_name")
+            only_below_minimum = arguments.get("only_below_minimum", False)
+
+            # Build domain for orderpoints
+            orderpoint_domain = []
+
+            # Get product IDs if filtering by name or category
+            product_ids = None
+            if product_name or category_name:
+                product_domain = [('type', '=', 'product')]
+                if product_name:
+                    product_domain.append('|')
+                    product_domain.append(('name', 'ilike', product_name))
+                    product_domain.append(('default_code', 'ilike', product_name))
+                if category_name:
+                    categories = client.search_read(
+                        'product.category',
+                        [('complete_name', 'ilike', category_name)],
+                        ['id'],
+                        limit=10
+                    )
+                    if categories:
+                        cat_ids = [c['id'] for c in categories]
+                        product_domain.append(('categ_id', 'child_of', cat_ids))
+
+                products = client.search_read(
+                    'product.product',
+                    product_domain,
+                    ['id'],
+                    limit=200
+                )
+                product_ids = [p['id'] for p in products]
+                if product_ids:
+                    orderpoint_domain.append(('product_id', 'in', product_ids))
+
+            # Get reorder rules (orderpoints)
+            orderpoints = client.search_read(
+                'stock.warehouse.orderpoint',
+                orderpoint_domain,
+                ['product_id', 'product_min_qty', 'product_max_qty', 'qty_to_order', 'trigger', 'location_id'],
+                limit=200
+            )
+
+            # Get current stock for these products
+            op_product_ids = list(set([op['product_id'][0] for op in orderpoints if op.get('product_id')]))
+
+            products_data = {}
+            if op_product_ids:
+                products = client.search_read(
+                    'product.product',
+                    [('id', 'in', op_product_ids)],
+                    ['id', 'name', 'default_code', 'qty_available', 'virtual_available']
+                )
+                products_data = {p['id']: p for p in products}
+
+            results = []
+            for op in orderpoints:
+                if not op.get('product_id'):
+                    continue
+
+                prod_id = op['product_id'][0]
+                prod = products_data.get(prod_id, {})
+                on_hand = prod.get('qty_available', 0)
+                min_qty = op.get('product_min_qty', 0)
+
+                # Skip if not below minimum and filter is enabled
+                if only_below_minimum and on_hand >= min_qty:
+                    continue
+
+                results.append({
+                    'product_id': prod_id,
+                    'product_name': op['product_id'][1],
+                    'product_code': prod.get('default_code') or 'N/A',
+                    'on_hand': on_hand,
+                    'forecasted': prod.get('virtual_available', 0),
+                    'min_qty': min_qty,
+                    'max_qty': op.get('product_max_qty', 0),
+                    'qty_to_order': op.get('qty_to_order', 0),
+                    'trigger': op.get('trigger', 'auto'),
+                    'location': op['location_id'][1] if op.get('location_id') else None,
+                    'below_minimum': on_hand < min_qty,
+                    'shortage': max(0, min_qty - on_hand)
+                })
+
+            # Sort by shortage (most critical first)
+            results.sort(key=lambda x: x['shortage'], reverse=True)
+
+            summary = {
+                'total_rules': len(results),
+                'below_minimum_count': sum(1 for r in results if r['below_minimum']),
+                'total_shortage': sum(r['shortage'] for r in results)
+            }
+
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps({'summary': summary, 'reorder_rules': results}, indent=2)
+                )]
+            )
+
+        elif name == "get_stock_forecast":
+            from datetime import datetime, timedelta
+
+            product_name = arguments.get("product_name")
+            category_name = arguments.get("category_name")
+            weeks = min(max(arguments.get("weeks", 4), 1), 12)  # 1-12 weeks
+
+            # Get products
+            product_domain = [('type', '=', 'product')]
+            if product_name:
+                product_domain.append('|')
+                product_domain.append(('name', 'ilike', product_name))
+                product_domain.append(('default_code', 'ilike', product_name))
+            if category_name:
+                categories = client.search_read(
+                    'product.category',
+                    [('complete_name', 'ilike', category_name)],
+                    ['id'],
+                    limit=10
+                )
+                if categories:
+                    cat_ids = [c['id'] for c in categories]
+                    product_domain.append(('categ_id', 'child_of', cat_ids))
+
+            products = client.search_read(
+                'product.product',
+                product_domain,
+                ['id', 'name', 'default_code', 'qty_available'],
+                limit=100
+            )
+
+            if not products:
+                return CallToolResult(
+                    content=[TextContent(
+                        type="text",
+                        text=json.dumps({"error": "No products found matching criteria"}, indent=2)
+                    )]
+                )
+
+            product_ids = [p['id'] for p in products]
+            products_dict = {p['id']: p for p in products}
+
+            today = datetime.now().date()
+
+            # Initialize results
+            results = {
+                'forecast_period': f"{today} to {today + timedelta(weeks=weeks)}",
+                'weeks': weeks,
+                'products': []
+            }
+
+            for prod_id, prod in products_dict.items():
+                product_forecast = {
+                    'product_id': prod_id,
+                    'name': prod['name'],
+                    'code': prod.get('default_code') or 'N/A',
+                    'current_on_hand': prod.get('qty_available', 0),
+                    'weekly_forecast': []
+                }
+
+                running_stock = prod.get('qty_available', 0)
+
+                for week in range(1, weeks + 1):
+                    week_start = today + timedelta(days=(week-1)*7)
+                    week_end = today + timedelta(days=week*7)
+
+                    # Get incoming moves for this week
+                    incoming = client.search_read(
+                        'stock.move',
+                        [
+                            ('product_id', '=', prod_id),
+                            ('state', 'in', ['assigned', 'confirmed', 'waiting']),
+                            ('location_dest_id', '=', DEFAULT_LOCATION_ID),
+                            ('date', '>=', week_start.strftime('%Y-%m-%d 00:00:00')),
+                            ('date', '<=', week_end.strftime('%Y-%m-%d 23:59:59'))
+                        ],
+                        ['product_uom_qty']
+                    )
+
+                    # Get outgoing moves for this week
+                    outgoing = client.search_read(
+                        'stock.move',
+                        [
+                            ('product_id', '=', prod_id),
+                            ('state', 'in', ['assigned', 'confirmed', 'waiting']),
+                            ('location_id', '=', DEFAULT_LOCATION_ID),
+                            ('date', '>=', week_start.strftime('%Y-%m-%d 00:00:00')),
+                            ('date', '<=', week_end.strftime('%Y-%m-%d 23:59:59'))
+                        ],
+                        ['product_uom_qty']
+                    )
+
+                    week_incoming = sum(m['product_uom_qty'] for m in incoming)
+                    week_outgoing = sum(m['product_uom_qty'] for m in outgoing)
+                    running_stock = running_stock + week_incoming - week_outgoing
+
+                    product_forecast['weekly_forecast'].append({
+                        'week': week,
+                        'period': f"{week_start.strftime('%d %b')} - {week_end.strftime('%d %b')}",
+                        'incoming': week_incoming,
+                        'outgoing': week_outgoing,
+                        'ending_stock': running_stock
+                    })
+
+                product_forecast['final_stock'] = running_stock
+                product_forecast['total_incoming'] = sum(w['incoming'] for w in product_forecast['weekly_forecast'])
+                product_forecast['total_outgoing'] = sum(w['outgoing'] for w in product_forecast['weekly_forecast'])
+
+                results['products'].append(product_forecast)
+
+            # Add summary
+            results['summary'] = {
+                'total_products': len(results['products']),
+                'total_current_stock': sum(p['current_on_hand'] for p in results['products']),
+                'total_final_stock': sum(p['final_stock'] for p in results['products']),
+                'total_incoming': sum(p['total_incoming'] for p in results['products']),
+                'total_outgoing': sum(p['total_outgoing'] for p in results['products'])
             }
 
             return CallToolResult(
