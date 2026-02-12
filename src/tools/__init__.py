@@ -7,6 +7,7 @@ from .search import handle_search_categories, handle_search_products, handle_get
 from .stock import handle_get_stock_levels, handle_get_reorder_alerts, handle_get_stock_summary, handle_get_reorder_rules
 from .forecast import handle_get_stock_forecast, handle_forecast_demand, handle_get_forecast_summary
 from .lead_time import handle_get_lead_time
+from .future_stock import handle_get_future_stock_alert
 from .analysis import (
     handle_analyze_abc_xyz,
     handle_get_abc_xyz_summary,
@@ -31,6 +32,7 @@ __all__ = [
     'handle_forecast_demand',
     'handle_get_forecast_summary',
     'handle_get_lead_time',
+    'handle_get_future_stock_alert',
     'handle_analyze_abc_xyz',
     'handle_get_abc_xyz_summary',
     'handle_analyze_turnover',

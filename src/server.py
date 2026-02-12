@@ -31,6 +31,7 @@ from .tools.forecast import (
     handle_get_forecast_summary,
 )
 from .tools.lead_time import handle_get_lead_time
+from .tools.future_stock import handle_get_future_stock_alert
 from .tools.analysis import (
     handle_analyze_abc_xyz,
     handle_get_abc_xyz_summary,
@@ -67,6 +68,9 @@ TOOL_HANDLERS = {
 
     # Lead time tools
     "get_lead_time": handle_get_lead_time,
+
+    # Future stock alert tools
+    "get_future_stock_alert": handle_get_future_stock_alert,
 
     # Analysis tools
     "analyze_abc_xyz": handle_analyze_abc_xyz,

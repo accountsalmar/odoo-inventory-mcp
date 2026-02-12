@@ -250,6 +250,35 @@ def get_tool_definitions() -> list[Tool]:
             }
         ),
 
+        # Future Stock Alert Tool
+        Tool(
+            name="get_future_stock_alert",
+            description="Get low stock alerts for a future date considering lead time. Shows which products will have stock below threshold on the target date, and when to place orders to avoid stockouts. Useful for planning ahead.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "target_date": {
+                        "type": "string",
+                        "description": "Target date to check stock levels (format: YYYY-MM-DD, e.g., '2025-07-26')"
+                    },
+                    "threshold": {
+                        "type": "number",
+                        "default": 50,
+                        "description": "Stock threshold - products with projected stock at or below this will be flagged as low"
+                    },
+                    "category_name": {
+                        "type": "string",
+                        "description": "Category name to filter products (e.g., 'Durasafe', 'Laminex')"
+                    },
+                    "product_name": {
+                        "type": "string",
+                        "description": "Product name to search for (partial match)"
+                    }
+                },
+                "required": ["target_date"]
+            }
+        ),
+
         # Analysis Tools
         Tool(
             name="analyze_abc_xyz",
