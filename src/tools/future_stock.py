@@ -21,6 +21,8 @@ def handle_get_future_stock_alert(client: OdooClient, arguments: dict[str, Any])
     threshold = arguments.get("threshold", 50)
     category_name = arguments.get("category_name")
     product_name = arguments.get("product_name")
+    # Default exclusion keywords - filter out TBA, Non Stock, DISC products
+    exclude_keywords = arguments.get("exclude_keywords", ["TBA", "Non Stock", "DISC"])
 
     # Parse target date
     try:
@@ -76,6 +78,21 @@ def handle_get_future_stock_alert(client: OdooClient, arguments: dict[str, Any])
             content=[TextContent(
                 type="text",
                 text=json.dumps({"error": "No products found matching criteria"}, indent=2)
+            )]
+        )
+
+    # Filter out products containing exclude keywords (case-insensitive)
+    if exclude_keywords:
+        products_basic = [
+            p for p in products_basic
+            if not any(kw.lower() in p['name'].lower() for kw in exclude_keywords)
+        ]
+
+    if not products_basic:
+        return CallToolResult(
+            content=[TextContent(
+                type="text",
+                text=json.dumps({"error": "No products found after applying exclusion filters"}, indent=2)
             )]
         )
 

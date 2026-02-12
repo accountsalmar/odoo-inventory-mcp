@@ -273,6 +273,12 @@ def get_tool_definitions() -> list[Tool]:
                     "product_name": {
                         "type": "string",
                         "description": "Product name to search for (partial match)"
+                    },
+                    "exclude_keywords": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "default": ["TBA", "Non Stock", "DISC"],
+                        "description": "Keywords to exclude from product names (default: TBA, Non Stock, DISC). Pass empty array [] to include all products."
                     }
                 },
                 "required": ["target_date"]
